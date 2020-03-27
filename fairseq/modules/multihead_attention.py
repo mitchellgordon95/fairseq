@@ -33,6 +33,7 @@ class MultiheadAttention(nn.Module):
         add_zero_attn=False,
         self_attention=False,
         encoder_decoder_attention=False,
+        attn_type="baseline"
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -73,11 +74,14 @@ class MultiheadAttention(nn.Module):
 
         self.onnx_trace = False
 
+        # TODO (mitchg): bring back the torch version eventually...?
         self.enable_torch_version = False
-        if hasattr(F, "multi_head_attention_forward"):
-            self.enable_torch_version = True
-        else:
-            self.enable_torch_version = False
+        # if hasattr(F, "multi_head_attention_forward"):
+        #     self.enable_torch_version = True
+        # else:
+        #     self.enable_torch_version = False
+
+        self.attn_type = attn_type
 
     def prepare_for_onnx_export_(self):
         self.onnx_trace = True
@@ -307,6 +311,10 @@ class MultiheadAttention(nn.Module):
                     dim=1,
                 )
 
+        if self.attn_type == "baseline":
+            return self._baseline_attention(q, k, v, tgt_len, src_len, bsz, attn_mask, key_padding_mask, before_softmax, embed_dim, need_weights, need_head_weights)
+
+    def _baseline_attention(self, q, k, v, tgt_len, src_len, bsz, attn_mask, key_padding_mask, before_softmax, embed_dim, need_weights, need_head_weights):
         attn_weights = torch.bmm(q, k.transpose(1, 2))
         attn_weights = MultiheadAttention.apply_sparse_mask(attn_weights, tgt_len, src_len, bsz)
 
@@ -358,6 +366,8 @@ class MultiheadAttention(nn.Module):
                 attn_weights = attn_weights.mean(dim=0)
 
         return attn, attn_weights
+
+
 
     @staticmethod
     def _append_prev_key_padding_mask(
@@ -459,3 +469,4 @@ class MultiheadAttention(nn.Module):
 
         for key, value in items_to_add.items():
             state_dict[key] = value
+

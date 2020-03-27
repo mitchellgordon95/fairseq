@@ -102,6 +102,8 @@ class TransformerModel(FairseqEncoderDecoderModel):
                             help='dropout probability for attention weights')
         parser.add_argument('--activation-dropout', '--relu-dropout', type=float, metavar='D',
                             help='dropout probability after activation in FFN.')
+        parser.add_argument('--attention-type', type=str, metavar='STR', default="baseline",
+                            help='should default attention be substituted for an approximation?')
         parser.add_argument('--encoder-embed-path', type=str, metavar='STR',
                             help='path to pre-trained encoder embedding')
         parser.add_argument('--encoder-embed-dim', type=int, metavar='N',

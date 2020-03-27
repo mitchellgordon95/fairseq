@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 from typing import Dict, List, Optional
+import tempfile
 
 import torch
 import torch.nn as nn
@@ -36,6 +37,7 @@ class TransformerEncoderLayer(nn.Module):
             args.encoder_attention_heads,
             dropout=args.attention_dropout,
             self_attention=True,
+            attn_type=args.attention_type
         )
         self.self_attn_layer_norm = LayerNorm(self.embed_dim)
         self.dropout = args.dropout
@@ -100,6 +102,18 @@ class TransformerEncoderLayer(nn.Module):
             key_padding_mask=encoder_padding_mask,
             attn_mask=attn_mask,
         )
+        # TODO (mitchg): get rid of this later, if we don't care anymore
+        # pre_softmax, _ = self.self_attn(
+        #     query=x,
+        #     key=x,
+        #     value=x,
+        #     key_padding_mask=encoder_padding_mask,
+        #     attn_mask=attn_mask,
+        #     before_softmax=True,
+        # )
+        # temp_name = next(tempfile._get_candidate_names())
+        # torch.save(pre_softmax, f'tmp/{temp_name}')
+
         x = F.dropout(x, p=self.dropout, training=self.training)
         x = residual + x
         if not self.normalize_before:
@@ -148,6 +162,7 @@ class TransformerDecoderLayer(nn.Module):
             add_bias_kv=add_bias_kv,
             add_zero_attn=add_zero_attn,
             self_attention=not self.cross_self_attention,
+            attn_type=args.attention_type
         )
         self.dropout = args.dropout
         self.activation_fn = utils.get_activation_fn(
@@ -176,6 +191,7 @@ class TransformerDecoderLayer(nn.Module):
                 vdim=getattr(args, "encoder_embed_dim", None),
                 dropout=args.attention_dropout,
                 encoder_decoder_attention=True,
+                attn_type=args.attention_type
             )
             self.encoder_attn_layer_norm = LayerNorm(self.embed_dim, export=export)
 
