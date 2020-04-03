@@ -5,6 +5,7 @@
 
 import math
 from typing import Dict, Optional, Tuple
+import numpy as np
 
 import torch
 import torch.nn.functional as F
@@ -311,12 +312,14 @@ class MultiheadAttention(nn.Module):
                     dim=1,
                 )
 
-        if self.attn_type == "baseline":
+        # Note (mitchg): even if the batch size is 1, bsz might still be > 1 (if beam search enabled in decoder)
+        if self.attn_type == "baseline" or src_len < 20 or attn_mask is not None or before_softmax or need_weights or bsz > 1:
             return self._baseline_attention(q, k, v, tgt_len, src_len, bsz, attn_mask, key_padding_mask, before_softmax, embed_dim, need_weights, need_head_weights)
+        if self.attn_type == "taylor_approx":
+            return self._taylor_attention(q, k, v, tgt_len, src_len, bsz, attn_mask, key_padding_mask, before_softmax, embed_dim, need_weights, need_head_weights)
 
     def _baseline_attention(self, q, k, v, tgt_len, src_len, bsz, attn_mask, key_padding_mask, before_softmax, embed_dim, need_weights, need_head_weights):
         attn_weights = torch.bmm(q, k.transpose(1, 2))
-        attn_weights = MultiheadAttention.apply_sparse_mask(attn_weights, tgt_len, src_len, bsz)
 
         assert list(attn_weights.size()) == [bsz * self.num_heads, tgt_len, src_len]
 
@@ -365,6 +368,54 @@ class MultiheadAttention(nn.Module):
                 # average attention weights over heads
                 attn_weights = attn_weights.mean(dim=0)
 
+        return attn, attn_weights
+
+
+    def _taylor_attention(self, q, k, v, tgt_len, src_len, bsz, attn_mask, key_padding_mask, before_softmax, embed_dim, need_weights, need_head_weights):
+
+        # Ignoring the attention mask because it complicates things
+        # Assuming we're in the encoder with no attention mask
+
+        # Ignoring ONNX stuff here because we don't care
+        # ...
+
+        # Can't do "before softmax" becaue we don't explicitly compute the attention matrix
+
+        # Don't need attention dropout, this function shouldn't be called during training
+
+        assert k.shape == v.shape == (bsz * self.num_heads, src_len, self.head_dim)
+
+        assert bsz == 1, "Can't do Taylor attention with batch size > 1 right now"
+        assert key_padding_mask is None or not torch.any(key_padding_mask.to(torch.bool)), "Expected no padding for batch size 1"
+        # TODO: is there a faster way to do this padding? Maybe after one of the matrix multiplications below
+        # if key_padding_mask is not None:
+        #     # Zero out the keys that correspond to padding symbols, so we don't attend to them
+        #     k = k.view(bsz, self.num_heads, src_len, self.head_dim)
+        #     k = k.masked_fill(
+        #         key_padding_mask.unsqueeze(1).unsqueeze(-1).to(torch.bool), 0.0
+        #     )
+        #     k = k.view(bsz * self.num_heads, src_len, self.head_dim)
+
+        # Approximate the numerator (e^x =? 1+x)
+        right_side = torch.bmm(q, torch.bmm(k.transpose(1, 2), v))  # bsz * heads X tgt_len X head_dim
+        left_side = torch.sum(v, dim=1, keepdim=True)  # bsz * heads X 1 X head_dim
+        numerator = left_side + right_side  # Will broadcast over rows
+        assert numerator.shape == (bsz * self.num_heads, tgt_len, self.head_dim)
+
+        # Approximate the denominator with leverage sampling
+        # TODO what is the right thing to do here?
+        samples = int(math.log(src_len, 1.2))
+        row_sample = k[:,np.random.choice(src_len, samples),:]
+        approx_qk = torch.bmm(q, row_sample.transpose(1, 2))
+        denominator = approx_qk.sum(dim=2, keepdim=True) + samples
+        assert denominator.shape == (bsz * self.num_heads, tgt_len, 1)
+
+        attn = numerator / denominator
+        assert list(attn.size()) == [bsz * self.num_heads, tgt_len, self.head_dim]
+        attn = attn.transpose(0, 1).contiguous().view(tgt_len, bsz, embed_dim)
+        attn = self.out_proj(attn)
+
+        attn_weights: Optional[Tensor] = None
         return attn, attn_weights
 
 
@@ -435,9 +486,6 @@ class MultiheadAttention(nn.Module):
         buffer: Dict[str, Optional[Tensor]],
     ):
         return self.set_incremental_state(incremental_state, "attn_state", buffer)
-
-    def apply_sparse_mask(attn_weights, tgt_len: int, src_len: int, bsz: int):
-        return attn_weights
 
     def upgrade_state_dict_named(self, state_dict, name):
         prefix = name + "." if name != "" else ""

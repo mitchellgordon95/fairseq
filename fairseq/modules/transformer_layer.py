@@ -100,6 +100,7 @@ class TransformerEncoderLayer(nn.Module):
             key=x,
             value=x,
             key_padding_mask=encoder_padding_mask,
+            need_weights=False,
             attn_mask=attn_mask,
         )
         # TODO (mitchg): get rid of this later, if we don't care anymore
