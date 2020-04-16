@@ -26,8 +26,10 @@ class MultiheadAttention(nn.Module):
         self,
         embed_dim,
         num_heads,
+        qdim=None,
         kdim=None,
         vdim=None,
+        odim=None,
         dropout=0.0,
         bias=True,
         add_bias_kv=False,
@@ -38,9 +40,11 @@ class MultiheadAttention(nn.Module):
     ):
         super().__init__()
         self.embed_dim = embed_dim
+        self.qdim = qdim if qdim is not None else embed_dim
         self.kdim = kdim if kdim is not None else embed_dim
         self.vdim = vdim if vdim is not None else embed_dim
-        self.qkv_same_dim = self.kdim == embed_dim and self.vdim == embed_dim
+        self.odim = odim if odim is not None else embed_dim
+        self.qkv_same_dim = self.kdim == self.qdim and self.qdim == self.vdim and self.vdim == self.kdim
 
         self.num_heads = num_heads
         self.dropout = dropout
@@ -53,15 +57,16 @@ class MultiheadAttention(nn.Module):
         self.self_attention = self_attention
         self.encoder_decoder_attention = encoder_decoder_attention
 
+        # TODO (mitchg): Isn't this... not true?
         assert not self.self_attention or self.qkv_same_dim, (
             "Self-attention requires query, key and " "value to be of the same size"
         )
 
         self.k_proj = nn.Linear(self.kdim, embed_dim, bias=bias)
         self.v_proj = nn.Linear(self.vdim, embed_dim, bias=bias)
-        self.q_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
+        self.q_proj = nn.Linear(self.qdim, embed_dim, bias=bias)
 
-        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
+        self.out_proj = nn.Linear(embed_dim, self.odim, bias=bias)
 
         if add_bias_kv:
             self.bias_k = Parameter(torch.Tensor(1, 1, embed_dim))
@@ -146,6 +151,9 @@ class MultiheadAttention(nn.Module):
 
         if (
             self.enable_torch_version
+            # TODO (mitchg) - we've allowed the attention internal dimension to be different from the query dimension.
+            # This breaks an assumption in the torch version.
+            and self.qdim == self.embed_dim
             and not self.onnx_trace
             and incremental_state is None
             and not static_kv

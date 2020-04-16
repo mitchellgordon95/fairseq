@@ -33,7 +33,11 @@ class TransformerEncoderLayer(nn.Module):
         super().__init__()
         self.embed_dim = args.encoder_embed_dim
         self.self_attn = MultiheadAttention(
-            self.embed_dim,
+            getattr(args, 'encoder_attn_proj_dim', self.embed_dim),
+            qdim=self.embed_dim,
+            kdim=self.embed_dim,
+            vdim=self.embed_dim,
+            odim=self.embed_dim,
             args.encoder_attention_heads,
             dropout=args.attention_dropout,
             self_attention=True,
@@ -157,7 +161,11 @@ class TransformerDecoderLayer(nn.Module):
         self.embed_dim = args.decoder_embed_dim
         self.cross_self_attention = getattr(args, "cross_self_attention", False)
         self.self_attn = MultiheadAttention(
-            embed_dim=self.embed_dim,
+            embed_dim=getattr(args, 'decoder_attn_proj_dim', self.embed_dim),
+            qdim=self.embed_dim,
+            kdim=self.embed_dim,
+            vdim=self.embed_dim,
+            odim=self.embed_dim,
             num_heads=args.decoder_attention_heads,
             dropout=args.attention_dropout,
             add_bias_kv=add_bias_kv,
@@ -186,10 +194,12 @@ class TransformerDecoderLayer(nn.Module):
             self.encoder_attn_layer_norm = None
         else:
             self.encoder_attn = MultiheadAttention(
-                self.embed_dim,
+                getattr(args, 'decoder_attn_proj_dim', self.embed_dim),
                 args.decoder_attention_heads,
-                kdim=getattr(args, "encoder_embed_dim", None),
-                vdim=getattr(args, "encoder_embed_dim", None),
+                qdim=self.embed_dim,
+                kdim=getattr(args, "encoder_embed_dim", self.embed_dim),
+                vdim=getattr(args, "encoder_embed_dim", self.embed_dim),
+                odim=self.embed_dim,
                 dropout=args.attention_dropout,
                 encoder_decoder_attention=True,
                 attn_type=args.attention_type
