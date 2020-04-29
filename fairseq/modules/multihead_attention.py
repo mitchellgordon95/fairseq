@@ -36,7 +36,8 @@ class MultiheadAttention(nn.Module):
         add_zero_attn=False,
         self_attention=False,
         encoder_decoder_attention=False,
-        attn_type="baseline"
+        attn_type="baseline",
+        shared_qk=False,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -62,10 +63,16 @@ class MultiheadAttention(nn.Module):
             "Self-attention requires query, key and " "value to be of the same size"
         )
 
-        self.k_proj = nn.Linear(self.kdim, embed_dim, bias=bias)
         self.v_proj = nn.Linear(self.vdim, embed_dim, bias=bias)
-        self.q_proj = nn.Linear(self.qdim, embed_dim, bias=bias)
-
+        if shared_qk:
+            assert self.self_attention, "Shared-QK can only be used with self-attention."
+            # TODO (mitchg): Doing it this way makes k_proj its own param in the state_dict
+            # Should probably remove it from this module's parameters somehow
+            self.k_proj = nn.Linear(self.kdim, embed_dim, bias=bias)
+            self.q_proj = self.k_proj
+        else:
+            self.k_proj = nn.Linear(self.kdim, embed_dim, bias=bias)
+            self.q_proj = nn.Linear(self.qdim, embed_dim, bias=bias)
         self.out_proj = nn.Linear(embed_dim, self.odim, bias=bias)
 
         if add_bias_kv:
@@ -146,7 +153,8 @@ class MultiheadAttention(nn.Module):
             need_weights = True
 
         tgt_len, bsz, embed_dim = query.size()
-        assert embed_dim == self.embed_dim
+        # TODO (mitchg) - we don't need this any more, right?
+        # assert embed_dim == self.embed_dim
         assert list(query.size()) == [tgt_len, bsz, embed_dim]
 
         if (
@@ -363,9 +371,9 @@ class MultiheadAttention(nn.Module):
         if self.onnx_trace and attn.size(1) == 1:
             # when ONNX tracing a single decoder step (sequence length == 1)
             # the transpose is a no-op copy before view, thus unnecessary
-            attn = attn.contiguous().view(tgt_len, bsz, embed_dim)
+            attn = attn.contiguous().view(tgt_len, bsz, self.embed_dim)
         else:
-            attn = attn.transpose(0, 1).contiguous().view(tgt_len, bsz, embed_dim)
+            attn = attn.transpose(0, 1).contiguous().view(tgt_len, bsz, self.embed_dim)
         attn = self.out_proj(attn)
         attn_weights: Optional[Tensor] = None
         if need_weights:

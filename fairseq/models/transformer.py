@@ -168,6 +168,8 @@ class TransformerModel(FairseqEncoderDecoderModel):
                             help='add layernorm to embedding')
         parser.add_argument('--no-scale-embedding', action='store_true',
                             help='if True, dont scale embeddings')
+        parser.add_argument('--shared-qk', default=False, action='store_true',
+                            help='share the parameters for the projection to Q and K in self-attention')
         # fmt: on
 
     @classmethod

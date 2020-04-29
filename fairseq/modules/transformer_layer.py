@@ -34,14 +34,15 @@ class TransformerEncoderLayer(nn.Module):
         self.embed_dim = args.encoder_embed_dim
         self.self_attn = MultiheadAttention(
             getattr(args, 'encoder_attn_proj_dim', self.embed_dim),
+            args.encoder_attention_heads,
             qdim=self.embed_dim,
             kdim=self.embed_dim,
             vdim=self.embed_dim,
             odim=self.embed_dim,
-            args.encoder_attention_heads,
             dropout=args.attention_dropout,
             self_attention=True,
-            attn_type=args.attention_type
+            attn_type=args.attention_type,
+            shared_qk=args.shared_qk,
         )
         self.self_attn_layer_norm = LayerNorm(self.embed_dim)
         self.dropout = args.dropout
@@ -171,7 +172,8 @@ class TransformerDecoderLayer(nn.Module):
             add_bias_kv=add_bias_kv,
             add_zero_attn=add_zero_attn,
             self_attention=not self.cross_self_attention,
-            attn_type=args.attention_type
+            attn_type=args.attention_type,
+            shared_qk=not self.cross_self_attention and args.shared_qk,
         )
         self.dropout = args.dropout
         self.activation_fn = utils.get_activation_fn(
