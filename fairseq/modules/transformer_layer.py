@@ -44,6 +44,7 @@ class TransformerEncoderLayer(nn.Module):
             attn_type=args.attention_type,
             shared_qk=args.shared_qk,
         )
+        self.attn_type = args.attention_type
         self.self_attn_layer_norm = LayerNorm(self.embed_dim)
         self.dropout = args.dropout
         self.activation_fn = utils.get_activation_fn(
@@ -91,7 +92,7 @@ class TransformerEncoderLayer(nn.Module):
         residual = x
         if self.normalize_before:
             x = self.self_attn_layer_norm(x)
-        if attn_mask is not None:
+        if attn_mask is not None and not self.attn_type == "simple":
             attn_mask = attn_mask.masked_fill(attn_mask.to(torch.bool), -1e8)
         # anything in original attn_mask = 1, becomes -1e8
         # anything in original attn_mask = 0, becomes 0

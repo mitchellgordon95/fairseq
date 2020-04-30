@@ -149,6 +149,8 @@ class MultiheadAttention(nn.Module):
                 weights for each head. Implies *need_weights*. Default:
                 return the average attention weights over all heads.
         """
+
+
         if need_head_weights:
             need_weights = True
 
@@ -156,6 +158,38 @@ class MultiheadAttention(nn.Module):
         # TODO (mitchg) - we don't need this any more, right?
         # assert embed_dim == self.embed_dim
         assert list(query.size()) == [tgt_len, bsz, embed_dim]
+
+        if self.attn_type == "simple":
+            query = query.transpose(0,1) # bsz, tgt_len, embed_dim
+            key = key.transpose(0,1) # bsz, src_len, embed_dim
+            value = value.transpose(0,1) # bsz, src_len, embed_dim
+            src_len = key.size(1)
+            assert query.shape[-1] == key.shape[-1]
+
+            query = self.q_proj(query)
+            value = self.v_proj(value)
+
+            attn_weights = torch.bmm(query, key.transpose(1, 2))
+
+            # TODO: Dropout?
+            if attn_mask is not None:
+                attn_mask = attn_mask.unsqueeze(0)
+                attn_weights += attn_mask
+                attn_weights = attn_weights.masked_fill(
+                    attn_mask.to(torch.bool), 0
+                )
+
+            if key_padding_mask is not None:
+                # don't attend to padding symbols
+                attn_weights = attn_weights.masked_fill(
+                    key_padding_mask.unsqueeze(1).to(torch.bool), 0
+                )
+
+            attn_weights = F.relu(attn_weights)
+
+            attn = torch.bmm(attn_weights, value)
+
+            return attn.transpose(0,1), None
 
         if (
             self.enable_torch_version
