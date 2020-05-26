@@ -33,6 +33,7 @@ class MultiheadAttention(nn.Module):
         add_zero_attn=False,
         self_attention=False,
         encoder_decoder_attention=False,
+        attn_type="baseline",
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -78,6 +79,8 @@ class MultiheadAttention(nn.Module):
             self.enable_torch_version = True
         else:
             self.enable_torch_version = False
+
+        self.attn_type = attn_type
 
     def prepare_for_onnx_export_(self):
         self.onnx_trace = True
@@ -135,9 +138,13 @@ class MultiheadAttention(nn.Module):
         if need_head_weights:
             need_weights = True
 
+        if self.attn_type == "simple":
+            return self._simple_attn(query, key, value, key_padding_mask, incremental_state, need_weights, static_kv, attn_mask)
+
         tgt_len, bsz, embed_dim = query.size()
         assert embed_dim == self.embed_dim
         assert list(query.size()) == [tgt_len, bsz, embed_dim]
+
 
         if (
             self.enable_torch_version
@@ -459,3 +466,104 @@ class MultiheadAttention(nn.Module):
 
         for key, value in items_to_add.items():
             state_dict[key] = value
+
+    def _simple_attn(
+        self,
+        query,
+        key: Optional[Tensor],
+        value: Optional[Tensor],
+        key_padding_mask: Optional[Tensor] = None,
+        incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
+        need_weights: bool = True,
+        static_kv: bool = False,
+        attn_mask: Optional[Tensor] = None,
+    ) -> Tuple[Tensor, Optional[Tensor]]:
+
+        assert self.num_heads == 1, "When using simple attention, please set number of enc/dec heads to 1"
+
+        query = query.transpose(0,1) # bsz, tgt_len, embed_dim
+        key = key.transpose(0,1) # bsz, src_len, embed_dim
+        value = value.transpose(0,1) # bsz, src_len, embed_dim
+        assert query.shape[-1] == key.shape[-1]
+        bsz = query.shape[0]
+
+        saved_state = self._get_input_buffer(incremental_state) if incremental_state is not None else None
+
+        query = self.q_proj(query)
+
+        # This is a weird "if" but it's better than three "else's".
+        if saved_state is not None and "prev_value" in saved_state and static_kv:
+            # If we have static_kv and previous values, then we don't need to re-project
+            value = None
+        else:
+            # Otherwise we have to project what we have
+            # (And maybe concatenate with prev values if they exist)
+            value = self.v_proj(value)
+
+        if saved_state is not None:
+            # saved states are stored with shape (bsz, seq_len, embed_dim)
+            if "prev_key" in saved_state:
+                prev_key = saved_state["prev_key"]
+                assert prev_key is not None
+                if static_kv:
+                    key = prev_key
+                else:
+                    assert key is not None
+                    key = torch.cat([prev_key, key], dim=1)
+            if "prev_value" in saved_state:
+                prev_value = saved_state["prev_value"]
+                assert prev_value is not None
+                if static_kv:
+                    value = prev_value
+                else:
+                    assert value is not None
+                    value = torch.cat([prev_value, value], dim=1)
+            prev_key_padding_mask: Optional[Tensor] = None
+            if "prev_key_padding_mask" in saved_state:
+                prev_key_padding_mask = saved_state["prev_key_padding_mask"]
+            assert key is not None and value is not None
+            key_padding_mask = MultiheadAttention._append_prev_key_padding_mask(
+                key_padding_mask=key_padding_mask,
+                prev_key_padding_mask=prev_key_padding_mask,
+                batch_size=key.size(0),
+                src_len=key.size(1),
+                static_kv=static_kv,
+            )
+            saved_state["prev_key"] = key
+            saved_state["prev_value"] = value
+            saved_state["prev_key_padding_mask"] = key_padding_mask
+            # In this branch incremental_state is never None
+            assert incremental_state is not None
+            incremental_state = self._set_input_buffer(incremental_state, saved_state)
+
+        attn_weights = torch.bmm(query, key.transpose(1, 2)) # bsz, tgt_len, src_len
+        attn_weights = F.relu(attn_weights) + 0.000001
+
+        # Note: all that's required for mask formatting is that
+        # "No mask" => 0
+        # "Mask" => non-zero
+        # This is because bool(-inf) == bool(-1e8) == bool(1) == True
+
+        if key_padding_mask is not None:
+            # don't attend to padding symbols
+            attn_weights = attn_weights.masked_fill(
+                key_padding_mask.unsqueeze(1).to(torch.bool), 0
+            )
+
+        # TODO: Dropout?
+        if attn_mask is not None:
+            attn_mask = attn_mask.unsqueeze(0)
+            attn_weights = attn_weights.masked_fill(
+                attn_mask.to(torch.bool), 0
+            )
+
+        attn_weights = attn_weights / torch.sum(attn_weights, dim=2, keepdim=True) # Normalize per target token
+
+        attn = torch.bmm(attn_weights, value)
+
+        if need_weights:
+            attn_weights = attn_weights.unsqueeze(0) # We assume the number of heads is 1
+        else:
+            attn_weights = None
+
+        return attn.transpose(0, 1), attn_weights

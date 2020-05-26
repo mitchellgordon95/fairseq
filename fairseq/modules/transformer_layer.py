@@ -36,7 +36,9 @@ class TransformerEncoderLayer(nn.Module):
             args.encoder_attention_heads,
             dropout=args.attention_dropout,
             self_attention=True,
+            attn_type=args.attention_type,
         )
+        self.attn_type = args.attention_type
         self.self_attn_layer_norm = LayerNorm(self.embed_dim)
         self.dropout = args.dropout
         self.activation_fn = utils.get_activation_fn(
@@ -148,6 +150,7 @@ class TransformerDecoderLayer(nn.Module):
             add_bias_kv=add_bias_kv,
             add_zero_attn=add_zero_attn,
             self_attention=not self.cross_self_attention,
+            attn_type=args.attention_type,
         )
         self.dropout = args.dropout
         self.activation_fn = utils.get_activation_fn(
@@ -176,6 +179,7 @@ class TransformerDecoderLayer(nn.Module):
                 vdim=getattr(args, "encoder_embed_dim", None),
                 dropout=args.attention_dropout,
                 encoder_decoder_attention=True,
+                attn_type=args.attention_type,
             )
             self.encoder_attn_layer_norm = LayerNorm(self.embed_dim, export=export)
 
@@ -196,8 +200,6 @@ class TransformerDecoderLayer(nn.Module):
         encoder_out: Optional[torch.Tensor] = None,
         encoder_padding_mask: Optional[torch.Tensor] = None,
         incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
-        prev_self_attn_state: Optional[List[torch.Tensor]] = None,
-        prev_attn_state: Optional[List[torch.Tensor]] = None,
         self_attn_mask: Optional[torch.Tensor] = None,
         self_attn_padding_mask: Optional[torch.Tensor] = None,
         need_attn: bool = False,
@@ -222,16 +224,6 @@ class TransformerDecoderLayer(nn.Module):
         residual = x
         if self.normalize_before:
             x = self.self_attn_layer_norm(x)
-        if prev_self_attn_state is not None:
-            prev_key, prev_value = prev_self_attn_state[:2]
-            saved_state: Dict[str, Optional[Tensor]] = {
-                "prev_key": prev_key,
-                "prev_value": prev_value,
-            }
-            if len(prev_self_attn_state) >= 3:
-                saved_state["prev_key_padding_mask"] = prev_self_attn_state[2]
-            assert incremental_state is not None
-            self.self_attn._set_input_buffer(incremental_state, saved_state)
         _self_attn_input_buffer = self.self_attn._get_input_buffer(incremental_state)
         if self.cross_self_attention and not (
             incremental_state is not None
@@ -275,16 +267,6 @@ class TransformerDecoderLayer(nn.Module):
             residual = x
             if self.normalize_before:
                 x = self.encoder_attn_layer_norm(x)
-            if prev_attn_state is not None:
-                prev_key, prev_value = prev_attn_state[:2]
-                saved_state: Dict[str, Optional[Tensor]] = {
-                    "prev_key": prev_key,
-                    "prev_value": prev_value,
-                }
-                if len(prev_attn_state) >= 3:
-                    saved_state["prev_key_padding_mask"] = prev_attn_state[2]
-                assert incremental_state is not None
-                self.encoder_attn._set_input_buffer(incremental_state, saved_state)
 
             x, attn = self.encoder_attn(
                 query=x,

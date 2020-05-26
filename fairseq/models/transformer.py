@@ -98,6 +98,8 @@ class TransformerModel(FairseqEncoderDecoderModel):
                             help='activation function to use')
         parser.add_argument('--dropout', type=float, metavar='D',
                             help='dropout probability')
+        parser.add_argument('--attention-type', type=str, metavar='STR', default="baseline",
+                            help='should default attention be substituted for an approximation?')
         parser.add_argument('--attention-dropout', type=float, metavar='D',
                             help='dropout probability for attention weights')
         parser.add_argument('--activation-dropout', '--relu-dropout', type=float, metavar='D',
